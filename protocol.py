@@ -1,8 +1,8 @@
 #此文件用于指定协议
 import json
-CMD_START = 1,    # 开始命令
-CMD_MAP = 2,      # 地图数据命令
-CMD_MOVE = 3,     # 移动命令 
+CMD_START = 1    # 开始命令
+CMD_MAP = 2      # 地图数据命令
+CMD_MOVE = 3     # 移动命令 
 
 
 class ClientProtocolData:
@@ -23,9 +23,22 @@ class Protocol:
         except json.JSONDecodeError as e:
             print(f"JSON 解析错误: {e}")
             return None
-
+        if not isinstance(data, dict):  # 检查数据是否为字典
+            print("数据格式错误，请检查数据格式是否正确")
         # 创建协议数据对象
         protocol_data = ClientProtocolData()
 
         # 解析数据
-        protocol_data.cmd_id = data.get("cmd_id", 0)
+        # protocol_data.cmd_id = data.get("cmd_id", 0)
+
+        return data
+
+
+    @staticmethod
+    def get_map():
+        """获取地图数据"""
+        send_data={
+                    "cmd": 2,
+                    "data": {}
+                    }
+        return send_data

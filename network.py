@@ -71,21 +71,7 @@ class NetworkManager:
             try:
                 data = self.socket.recv(4096).decode('utf-8')
                 if data:
-                    buffer += data
-                    
-                    # 处理可能的多个JSON对象粘包情况
-                    while buffer:
-                        try:
-                            obj, idx = json.JSONDecoder().raw_decode(buffer)
-                            # 解析出一个完整的JSON对象
-                            if self.on_receive_callback:
-                                self.on_receive_callback(obj)
-                            
-                            # 移除已处理的部分
-                            buffer = buffer[idx:].lstrip()
-                        except ValueError:
-                            # 没有找到完整的JSON对象，等待更多数据
-                            break
+                    self.on_receive_callback(data)
             except socket.timeout:
                 # 超时是正常的，继续循环
                 continue

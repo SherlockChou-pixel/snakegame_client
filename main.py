@@ -1,3 +1,4 @@
+import json
 import protocol
 import sys
 import threading
@@ -22,8 +23,8 @@ class Client:
 
     def handle_server_data(self, data):
         """处理从服务器接收到的数据"""
-        protocol.Protocol.parse_data(None, str(data))
-        print(data)
+        result=protocol.Protocol.parse_data(None, str(data))
+        print("接收到数据cmd: ",result)
 
     def send(self, message):
         return self.network_manager.send(message)
@@ -40,7 +41,10 @@ class Client:
                     print("正在退出程序...")
                     self.running = False
                     self.network_manager.disconnect()
-                    break
+                    self.send(user_input)
+                elif user_input == "2":
+                    send_data=protocol.Protocol.get_map()
+                    self.send(json.dumps(send_data)+'\n')
             except EOFError:
                 # 输入流结束
                 break
