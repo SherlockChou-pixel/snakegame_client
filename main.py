@@ -1,8 +1,8 @@
-import json
-import protocol
-import sys
+﻿import json
 import threading
-import time
+
+import protocol
+from game_ui import GameUI
 from network import NetworkManager
 
 
@@ -10,21 +10,36 @@ class Client:
     def __init__(self, host, port):
         self.network_manager = NetworkManager(host, port)
         self.running = True
+        self.ui = GameUI(on_action=self.handle_ui_action)
 
     def connect(self):
         def on_connect():
             print("已连接到服务器")
-        
+
         def on_error(error):
             print(f"连接服务器失败: {error}")
-        
+
         self.network_manager.set_receive_callback(self.handle_server_data)
-        self.network_manager.connect(on_connect=on_connect, on_error=on_error)
+        return self.network_manager.connect(on_connect=on_connect, on_error=on_error)
+
+    def stop(self):
+        self.running = False
+        self.ui.running = False
 
     def handle_server_data(self, data):
-        """处理从服务器接收到的数据"""
-        result=protocol.Protocol.parse_data(None, str(data))
-        print("接收到数据cmd: ",result)
+        result = protocol.Protocol.parse_data(None, str(data))
+        if not result:
+            return
+
+        if result.get("cmd") == 2:
+            map_data = result.get("data", {})
+            print(map_data)
+
+            width = map_data.get("width")
+            height = map_data.get("height")
+            if width is not None and height is not None:
+                self.ui.set_map_size(width, height)
+                print(f"已更新地图显示: {width} x {height}")
 
     def send(self, message):
         return self.network_manager.send(message)
@@ -32,44 +47,61 @@ class Client:
     def close(self):
         self.network_manager.disconnect()
 
+    def request_map(self):
+        send_data = protocol.Protocol.get_map()
+        ok = self.send(json.dumps(send_data) + "\n")
+        if ok:
+            print("已发送地图请求")
+        else:
+            print("地图请求发送失败")
+
+    def handle_ui_action(self, action):
+        action_map = {
+            "get_map": self.request_map,
+        }
+
+        handler = action_map.get(action)
+        if handler:
+            handler()
+        else:
+            print(f"未处理的界面动作: {action}")
+
     def handle_user_input(self):
-        """处理用户输入的线程函数"""
         while self.running:
             try:
                 user_input = input().strip().lower()
-                if user_input in ['quit', 'exit', 'q', 'Q']:
+                if user_input in ["quit", "exit", "q"]:
                     print("正在退出程序...")
-                    self.running = False
-                    self.network_manager.disconnect()
-                    self.send(user_input)
-                elif user_input == "2":
-                    send_data=protocol.Protocol.get_map()
-                    self.send(json.dumps(send_data)+'\n')
+                    self.stop()
+                    break
+
+                if user_input == "2":
+                    self.request_map()
             except EOFError:
-                # 输入流结束
                 break
             except KeyboardInterrupt:
                 print("\n正在退出程序...")
-                self.running = False
-                self.network_manager.disconnect()
+                self.stop()
                 break
 
     def run(self):
-        self.connect()
-        print("连接已建立，输入 'quit'、'exit' 或 'q' 退出程序")
-        
-        # 启动用户输入处理线程
-        input_thread = threading.Thread(target=self.handle_user_input)
-        input_thread.daemon = True
-        input_thread.start()
-        
-        # 主循环 - 监控运行状态
-        while self.running:
-            time.sleep(0.1)  # 短暂休眠，减少CPU使用
+        if not self.connect():
+            return
 
-        # 等待输入线程结束
-        input_thread.join(timeout=1)  # 最多等待1秒
-        self.close()
+        print("连接已建立，输入 'quit'、'exit' 或 'q' 退出程序")
+
+        input_thread = threading.Thread(target=self.handle_user_input, daemon=True)
+        input_thread.start()
+
+        try:
+            self.ui.run()
+        except Exception as e:
+            print(f"运行过程中出现异常: {e}")
+        finally:
+            self.stop()
+            self.close()
+            input_thread.join(timeout=1)
+            print("程序已退出")
 
 
 if __name__ == "__main__":

@@ -1,13 +1,10 @@
-import socket
-import json
+﻿import socket
 import threading
-import time
 
 
 class NetworkManager:
-    """
-    网络管理器，负责处理与服务器的通信
-    """
+    """负责与服务器通信。"""
+
     def __init__(self, host, port):
         self.host = host
         self.port = port
@@ -17,63 +14,65 @@ class NetworkManager:
         self.connected = False
 
     def connect(self, on_connect=None, on_error=None):
-        """
-        连接到服务器
-        :param on_connect: 连接成功的回调函数
-        :param on_error: 连接失败的回调函数
-        """
+        """连接到服务器。"""
         try:
+            self.socket.settimeout(3.0)
             self.socket.connect((self.host, self.port))
-            self.socket.settimeout(1.0)  # 设置超时
+            self.socket.settimeout(1.0)
             self.running = True
             self.connected = True
-            
+
             if on_connect:
                 on_connect()
-            
-            # 启动接收数据的线程
-            receive_thread = threading.Thread(target=self._receive_loop)
-            receive_thread.daemon = True
+
+            receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
             receive_thread.start()
-            
+            return True
         except Exception as e:
+            self.running = False
             self.connected = False
             if on_error:
                 on_error(e)
+            return False
 
     def disconnect(self):
-        """断开连接"""
+        """断开连接。"""
         self.running = False
         self.connected = False
-        self.socket.close()
+        try:
+            self.socket.close()
+        except OSError:
+            pass
 
     def send(self, data):
-        """发送数据到服务器"""
-        if self.connected:
-            try:
-                self.socket.send(data.encode())
-                return True
-            except Exception as e:
-                print(f"发送数据失败: {e}")
-                self.connected = False
-                return False
-        return False
+        """发送数据到服务器。"""
+        if not self.connected:
+            return False
+
+        try:
+            self.socket.send(data.encode())
+            return True
+        except Exception as e:
+            print(f"发送数据失败: {e}")
+            self.connected = False
+            return False
 
     def set_receive_callback(self, callback):
-        """设置接收数据的回调函数"""
+        """设置收到数据时的回调函数。"""
         self.on_receive_callback = callback
 
     def _receive_loop(self):
-        """接收数据的循环，运行在独立线程中"""
-        buffer = ""
-        
+        """后台接收数据。"""
         while self.running:
             try:
-                data = self.socket.recv(4096).decode('utf-8')
-                if data:
+                data = self.socket.recv(4096).decode("utf-8")
+                if not data:
+                    self.connected = False
+                    break
+
+                if self.on_receive_callback:
                     self.on_receive_callback(data)
             except socket.timeout:
-                # 超时是正常的，继续循环
                 continue
             except Exception as e:
                 if self.running:
