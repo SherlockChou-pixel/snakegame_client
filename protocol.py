@@ -38,7 +38,24 @@ class Protocol:
     def get_map():
         """获取地图数据"""
         send_data={
-                    "cmd": 2,
+                    "cmd": 3,
                     "data": {}
+                    }
+        return send_data
+    @staticmethod
+    def join_room():
+        """加入房间"""
+        send_data={
+                    "cmd": 1,
+                    "data": {}
+                    }
+        return send_data
+    
+    @staticmethod   
+    def start_game(room_id):
+        """开始游戏"""
+        send_data={
+                    "cmd": 2,
+                    "data": {"room_id": room_id},
                     }
         return send_data

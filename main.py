@@ -1,4 +1,4 @@
-﻿import json
+import json
 import threading
 import time
 
@@ -14,6 +14,10 @@ class Client:
         self.ui = GameUI(on_action=self.handle_ui_action)
         self.ui.set_connection_status(False)
         self.reconnect_interval = 3
+
+        self.room_id = None
+        self.score = 0
+        self.snake = []
 
     def show_disconnected_message(self):
         self.ui.set_connection_status(False)
@@ -52,22 +56,88 @@ class Client:
         self.running = False
         self.ui.running = False
 
+    def _decode_messages(self, raw_data):
+        text = str(raw_data).strip()
+        if not text:
+            return []
+
+        messages = []
+        decoder = json.JSONDecoder()
+        index = 0
+
+        while index < len(text):
+            while index < len(text) and text[index].isspace():
+                index += 1
+
+            if index >= len(text):
+                break
+
+            try:
+                message, end_index = decoder.raw_decode(text, index)
+                messages.append(message)
+                index = end_index
+            except json.JSONDecodeError:
+                messages = []
+                for line in text.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parsed = protocol.Protocol.parse_data(None, line)
+                    if parsed:
+                        messages.append(parsed)
+                break
+
+        return messages
+
+    def _handle_join_room(self, result):
+        data = result.get("data", {})
+        self.room_id = data.get("room_id")
+        self.score = int(data.get("score", 0) or 0)
+        self.snake = data.get("snake", []) or []
+
+        self.ui.update_room(self.room_id, score=self.score, snake=self.snake)
+        self.ui.show_message(f"已进入房间 {self.room_id}", color=(60, 160, 90), duration=1800)
+        print(f"房间号: {self.room_id}")
+
+    def _handle_map_data(self, result):
+        data = result.get("data", {})
+        width = data.get("width")
+        height = data.get("height")
+
+        if width is not None and height is not None:
+            self.ui.set_map_size(width, height)
+
+        if "snake" in data:
+            self.snake = data.get("snake", []) or self.snake
+
+        if "score" in data:
+            self.score = int(data.get("score", 0) or 0)
+
+        self.ui.set_snake(self.snake)
+        self.ui.set_score(self.score)
+
     def handle_server_data(self, data):
         self.ui.set_connection_status(True)
-        result = protocol.Protocol.parse_data(None, str(data))
-        if not result:
-            return
 
-        if result.get("cmd") == 2:
-            map_data = result.get("data", {})
-            print(map_data)
+        for result in self._decode_messages(data):
+            print(result)
+            if not isinstance(result, dict):
+                continue
 
-            width = map_data.get("width")
-            height = map_data.get("height")
-            if width is not None and height is not None:
-                self.ui.set_map_size(width, height)
-                self.ui.show_message(f"地图已更新: {width} x {height}", color=(70, 70, 70), duration=1800)
-                print(f"已更新地图显示: {width} x {height}")
+            cmd = result.get("cmd")
+            status = result.get("status")
+            msg = result.get("msg") or result.get("message")
+
+            if status == "error":
+                self.ui.show_message(msg or "服务器返回错误", color=(220, 60, 60), duration=2500)
+                continue
+
+            if cmd == 1:
+                self._handle_join_room(result)
+            elif cmd == 2:
+                self._handle_map_data(result)
+            elif msg:
+                self.ui.show_message(msg, color=(70, 70, 70), duration=1800)
 
     def send(self, message):
         ok = self.network_manager.send(message)
@@ -79,19 +149,50 @@ class Client:
         self.ui.set_connection_status(False)
         self.network_manager.disconnect()
 
-    def request_map(self):
+    def request_map(self, show_feedback=True):
         send_data = protocol.Protocol.get_map()
         ok = self.send(json.dumps(send_data) + "\n")
         if ok:
             print("已发送地图请求")
-            self.ui.show_message("已发送地图请求", color=(70, 70, 70), duration=1500)
+            if show_feedback:
+                self.ui.show_message("已发送地图请求", color=(70, 70, 70), duration=1500)
         else:
             print("地图请求发送失败")
             self.ui.show_message("地图请求发送失败", color=(220, 60, 60), duration=2200)
 
+    def join_room(self):
+        send_data = protocol.Protocol.join_room()
+        ok = self.send(json.dumps(send_data) + "\n")
+        if ok:
+            print("已发送加入房间请求")
+            self.ui.show_message("正在加入房间...", color=(70, 70, 70), duration=1500)
+        else:
+            print("加入房间请求发送失败")
+            self.ui.show_message("加入房间请求发送失败", color=(220, 60, 60), duration=2500)
+
+    def start_game(self):
+        if self.room_id is None:
+            print("请先加入房间")
+            self.ui.show_message("请先加入房间", color=(220, 60, 60), duration=2500)
+            return
+
+        send_data = protocol.Protocol.start_game(self.room_id)
+        ok = self.send(json.dumps(send_data) + "\n")
+        if ok:
+            print("已发送开始游戏请求")
+            self.ui.enter_game_scene()
+            self.ui.set_snake(self.snake)
+            self.ui.set_score(self.score)
+            self.ui.show_message("开始游戏，正在加载地图...", color=(70, 70, 70), duration=1800)
+            self.request_map(show_feedback=False)
+        else:
+            print("开始游戏请求发送失败")
+            self.ui.show_message("开始游戏请求发送失败", color=(220, 60, 60), duration=2200)
+
     def handle_ui_action(self, action):
         action_map = {
-            "get_map": self.request_map,
+            "join_room": self.join_room,
+            "start_game": self.start_game,
         }
 
         if not self.network_manager.connected:
@@ -113,13 +214,6 @@ class Client:
                     print("正在退出程序...")
                     self.stop()
                     break
-
-                if user_input == "2":
-                    if not self.network_manager.connected:
-                        print("服务器未连接，无法请求地图")
-                        self.show_disconnected_message()
-                        continue
-                    self.request_map()
             except EOFError:
                 break
             except KeyboardInterrupt:
