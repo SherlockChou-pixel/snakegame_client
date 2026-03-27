@@ -2,6 +2,17 @@ import pygame
 
 
 class GameUI:
+    DIRECTION_KEY_MAP = {
+        pygame.K_UP: 0,
+        pygame.K_DOWN: 1,
+        pygame.K_LEFT: 2,
+        pygame.K_RIGHT: 3,
+        pygame.K_w: 0,
+        pygame.K_s: 1,
+        pygame.K_a: 2,
+        pygame.K_d: 3,
+    }
+
     def __init__(self, on_action=None):
         pygame.init()
         self.screen = pygame.display.set_mode((980, 680))
@@ -22,6 +33,7 @@ class GameUI:
         self.map_width = 0
         self.map_height = 0
         self.snake = []
+        self.food = None
         self.room_id = ""
         self.score = 0
 
@@ -88,6 +100,12 @@ class GameUI:
                     segments.append((int(point[0]), int(point[1])))
         self.snake = segments
 
+    def set_food(self, food):
+        if not isinstance(food, dict) or "x" not in food or "y" not in food:
+            self.food = None
+            return
+        self.food = (int(food["x"]), int(food["y"]))
+
     def set_score(self, score):
         self.score = int(score or 0)
 
@@ -105,10 +123,10 @@ class GameUI:
         self.tip_duration = duration
         self.tip_start_time = pygame.time.get_ticks()
 
-    def _emit_action(self, action):
-        print(f"点击按钮：{action}")
+    def _emit_action(self, action, payload=None):
+        print(f"触发动作: {action}, payload={payload}")
         if self.on_action:
-            self.on_action(action)
+            self.on_action(action, payload)
 
     def _get_current_buttons(self):
         return self.scene_buttons.get(self.current_scene, [])
@@ -118,6 +136,16 @@ class GameUI:
             if button["rect"].collidepoint(mouse_pos):
                 self._emit_action(button["action"])
                 break
+
+    def _handle_keydown(self, key):
+        if self.current_scene != "game":
+            return
+
+        direction = self.DIRECTION_KEY_MAP.get(key)
+        if direction is None:
+            return
+
+        self._emit_action("move", {"direction": direction})
 
     def _draw_card(self, rect, bg_color=(255, 255, 255), border_color=(220, 226, 232)):
         pygame.draw.rect(self.screen, bg_color, rect, border_radius=18)
@@ -257,6 +285,16 @@ class GameUI:
                 pygame.draw.rect(self.screen, (232, 242, 249), rect)
                 pygame.draw.rect(self.screen, (205, 214, 224), rect, width=1)
 
+        if self.food is not None:
+            food_x, food_y = self.food
+            if 0 <= food_x < self.map_width and 0 <= food_y < self.map_height:
+                x = offset_x + food_x * cell_size
+                y = offset_y + food_y * cell_size
+                center = (round(x + cell_size / 2), round(y + cell_size / 2))
+                radius = max(4, round(cell_size * 0.32))
+                pygame.draw.circle(self.screen, (235, 76, 76), center, radius)
+                pygame.draw.circle(self.screen, (188, 38, 38), center, radius, width=1)
+
         for index, (snake_x, snake_y) in enumerate(self.snake):
             if snake_x < 0 or snake_x >= self.map_width or snake_y < 0 or snake_y >= self.map_height:
                 continue
@@ -278,22 +316,28 @@ class GameUI:
     def _draw_game_scene(self):
         self._draw_map()
 
-        side_rect = pygame.Rect(680, 120, 240, 260)
+        side_rect = pygame.Rect(680, 120, 240, 330)
         self._draw_card(side_rect, bg_color=(252, 254, 255), border_color=(221, 229, 238))
 
         title = self.subtitle_font.render("当前信息", True, (42, 48, 60))
         room_text = self.info_font.render(f"房间号：{self.room_id or '--'}", True, (92, 102, 118))
         score_text = self.info_font.render(f"分数：{self.score}", True, (92, 102, 118))
         snake_text = self.info_font.render(f"蛇身长度：{len(self.snake)}", True, (92, 102, 118))
-        note_1 = self.tip_font.render("当前仅渲染地图和蛇的位置。", True, (120, 128, 142))
-        note_2 = self.tip_font.render("蛇的运动逻辑后续再接入。", True, (120, 128, 142))
+        food_text = self.info_font.render(
+            f"食物：{self.food if self.food is not None else '--'}",
+            True,
+            (92, 102, 118),
+        )
+        note_1 = self.tip_font.render("方向键 / WASD：发送移动指令", True, (120, 128, 142))
+        note_2 = self.tip_font.render("移动结果以后端推送状态为准。", True, (120, 128, 142))
 
         self.screen.blit(title, (side_rect.x + 20, side_rect.y + 22))
         self.screen.blit(room_text, (side_rect.x + 20, side_rect.y + 84))
         self.screen.blit(score_text, (side_rect.x + 20, side_rect.y + 126))
         self.screen.blit(snake_text, (side_rect.x + 20, side_rect.y + 168))
-        self.screen.blit(note_1, (side_rect.x + 20, side_rect.y + 218))
-        self.screen.blit(note_2, (side_rect.x + 20, side_rect.y + 242))
+        self.screen.blit(food_text, (side_rect.x + 20, side_rect.y + 210))
+        self.screen.blit(note_1, (side_rect.x + 20, side_rect.y + 266))
+        self.screen.blit(note_2, (side_rect.x + 20, side_rect.y + 290))
 
     def run(self):
         while self.running:
@@ -302,6 +346,8 @@ class GameUI:
                     self.running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     self._handle_button_click(event.pos)
+                elif event.type == pygame.KEYDOWN:
+                    self._handle_keydown(event.key)
 
             self.screen.fill((244, 247, 251))
 
@@ -323,8 +369,9 @@ class GameUI:
 
 if __name__ == "__main__":
     game_ui = GameUI()
-    game_ui.update_room("Room0", score=0, snake=[[0, 0], [1, 0], [2, 0]])
+    game_ui.update_room("Room0", score=0, snake=[[18, 8], [18, 7], [18, 6]])
     game_ui.set_map_size(25, 25)
+    game_ui.set_food({"x": 1, "y": 4})
     game_ui.enter_game_scene()
     game_ui.show_message("演示界面")
     game_ui.run()

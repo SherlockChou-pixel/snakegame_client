@@ -1,3 +1,4 @@
+import ast
 import json
 import threading
 import time
@@ -15,9 +16,11 @@ class Client:
         self.ui.set_connection_status(False)
         self.reconnect_interval = 3
 
+        self.player_id = None
         self.room_id = None
         self.score = 0
         self.snake = []
+        self.food = None
 
     def show_disconnected_message(self):
         self.ui.set_connection_status(False)
@@ -56,41 +59,64 @@ class Client:
         self.running = False
         self.ui.running = False
 
+    def _parse_message_text(self, text):
+        text = str(text).strip()
+        if not text:
+            return None
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        try:
+            return ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            pass
+
+        parsed = protocol.Protocol.parse_data(None, text)
+        if isinstance(parsed, dict):
+            return parsed
+        return None
+
     def _decode_messages(self, raw_data):
         text = str(raw_data).strip()
         if not text:
             return []
 
         messages = []
-        decoder = json.JSONDecoder()
-        index = 0
 
-        while index < len(text):
-            while index < len(text) and text[index].isspace():
-                index += 1
+        parsed_whole = self._parse_message_text(text)
+        if isinstance(parsed_whole, dict):
+            return [parsed_whole]
+        if isinstance(parsed_whole, list):
+            return [item for item in parsed_whole if isinstance(item, dict)]
 
-            if index >= len(text):
-                break
-
-            try:
-                message, end_index = decoder.raw_decode(text, index)
-                messages.append(message)
-                index = end_index
-            except json.JSONDecodeError:
-                messages = []
-                for line in text.splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    parsed = protocol.Protocol.parse_data(None, line)
-                    if parsed:
-                        messages.append(parsed)
-                break
+        for line in text.splitlines():
+            parsed = self._parse_message_text(line)
+            if isinstance(parsed, dict):
+                messages.append(parsed)
+            elif isinstance(parsed, list):
+                messages.extend(item for item in parsed if isinstance(item, dict))
 
         return messages
 
+    def _normalize_food(self, food):
+        if not isinstance(food, dict):
+            return None
+        if "x" not in food or "y" not in food:
+            return None
+        return {"x": int(food["x"]), "y": int(food["y"])}
+
+    def _sync_ui_player_state(self):
+        self.ui.set_snake(self.snake)
+        self.ui.set_score(self.score)
+        self.ui.set_food(self.food)
+
     def _handle_join_room(self, result):
         data = result.get("data", {})
+
+        self.player_id = data.get("id", self.player_id)
         self.room_id = data.get("room_id")
         self.score = int(data.get("score", 0) or 0)
         self.snake = data.get("snake", []) or []
@@ -98,6 +124,7 @@ class Client:
         self.ui.update_room(self.room_id, score=self.score, snake=self.snake)
         self.ui.show_message(f"已进入房间 {self.room_id}", color=(60, 160, 90), duration=1800)
         print(f"房间号: {self.room_id}")
+        print(f"玩家ID: {self.player_id}")
 
     def _handle_map_data(self, result):
         data = result.get("data", {})
@@ -113,8 +140,45 @@ class Client:
         if "score" in data:
             self.score = int(data.get("score", 0) or 0)
 
-        self.ui.set_snake(self.snake)
-        self.ui.set_score(self.score)
+        if "food" in data:
+            self.food = self._normalize_food(data.get("food"))
+
+        self._sync_ui_player_state()
+
+    def _extract_local_player_state(self, players):
+        if not isinstance(players, list) or not players:
+            return None
+
+        if self.player_id is not None:
+            for player in players:
+                if isinstance(player, dict) and player.get("id") == self.player_id:
+                    return player
+
+        first_player = players[0]
+        return first_player if isinstance(first_player, dict) else None
+
+    def _handle_game_state_update(self, result):
+        if self.room_id is None:
+            self.room_id = result.get("room_id")
+
+        player_state = self._extract_local_player_state(result.get("players"))
+        if player_state:
+            self.player_id = player_state.get("id", self.player_id)
+            self.score = int(player_state.get("score", self.score) or 0)
+            self.snake = player_state.get("snake_body", []) or []
+
+        if "food" in result:
+            self.food = self._normalize_food(result.get("food"))
+
+        self._sync_ui_player_state()
+
+    def _handle_cmd4_message(self, result):
+        data = result.get("data", {})
+        if not isinstance(data, dict):
+            return
+
+        if data.get("type") == "game_state_update":
+            self._handle_game_state_update(data)
 
     def handle_server_data(self, data):
         self.ui.set_connection_status(True)
@@ -125,6 +189,7 @@ class Client:
                 continue
 
             cmd = result.get("cmd")
+            msg_type = result.get("type")
             status = result.get("status")
             msg = result.get("msg") or result.get("message")
 
@@ -136,6 +201,10 @@ class Client:
                 self._handle_join_room(result)
             elif cmd == 2:
                 self._handle_map_data(result)
+            elif cmd == 4:
+                self._handle_cmd4_message(result)
+            elif msg_type == "game_state_update":
+                self._handle_game_state_update(result)
             elif msg:
                 self.ui.show_message(msg, color=(70, 70, 70), duration=1800)
 
@@ -181,28 +250,38 @@ class Client:
         if ok:
             print("已发送开始游戏请求")
             self.ui.enter_game_scene()
-            self.ui.set_snake(self.snake)
-            self.ui.set_score(self.score)
+            self._sync_ui_player_state()
             self.ui.show_message("开始游戏，正在加载地图...", color=(70, 70, 70), duration=1800)
             self.request_map(show_feedback=False)
         else:
             print("开始游戏请求发送失败")
             self.ui.show_message("开始游戏请求发送失败", color=(220, 60, 60), duration=2200)
 
-    def handle_ui_action(self, action):
-        action_map = {
-            "join_room": self.join_room,
-            "start_game": self.start_game,
-        }
+    def send_move(self, direction):
+        if self.room_id is None or self.player_id is None:
+            self.ui.show_message("房间或玩家信息未准备好", color=(220, 60, 60), duration=1500)
+            return
 
+        send_data = protocol.Protocol.move(self.room_id, self.player_id, direction)
+        ok = self.send(json.dumps(send_data) + "\n")
+        if not ok:
+            print("移动指令发送失败")
+            self.ui.show_message("移动指令发送失败", color=(220, 60, 60), duration=1500)
+
+    def handle_ui_action(self, action, payload=None):
         if not self.network_manager.connected:
             print(f"点击动作 {action} 时服务器未连接")
             self.show_disconnected_message()
             return
 
-        handler = action_map.get(action)
-        if handler:
-            handler()
+        if action == "join_room":
+            self.join_room()
+        elif action == "start_game":
+            self.start_game()
+        elif action == "move":
+            direction = None if not isinstance(payload, dict) else payload.get("direction")
+            if direction is not None:
+                self.send_move(int(direction))
         else:
             print(f"未处理的界面动作: {action}")
 
