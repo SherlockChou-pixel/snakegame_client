@@ -1,20 +1,20 @@
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
+# Build directories
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+
+# IDE files
+.vscode/
+.idea/
+.claude/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Config files (optional - uncomment if you want to ignore config.json)
+# config.json

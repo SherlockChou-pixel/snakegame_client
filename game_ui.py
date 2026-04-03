@@ -1,17 +1,16 @@
+import os
+import sys
 import pygame
 
 
+def _get_bundled_font(filename):
+    """获取打包后或开发环境下的字体文件路径"""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, filename)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+
+
 class GameUI:
-    DIRECTION_KEY_MAP = {
-        pygame.K_UP: 0,
-        pygame.K_DOWN: 1,
-        pygame.K_LEFT: 2,
-        pygame.K_RIGHT: 3,
-        pygame.K_w: 0,
-        pygame.K_s: 1,
-        pygame.K_a: 2,
-        pygame.K_d: 3,
-    }
 
     def __init__(self, on_action=None):
         pygame.init()
@@ -21,12 +20,23 @@ class GameUI:
         self.running = True
         self.on_action = on_action
 
-        self.title_font = self._load_font(["Microsoft YaHei UI", "Microsoft YaHei", "SimHei"], 34, bold=True)
-        self.subtitle_font = self._load_font(["Microsoft YaHei UI", "Microsoft YaHei", "SimHei"], 22, bold=True)
-        self.button_font = self._load_font(["Microsoft YaHei UI", "Microsoft YaHei", "SimHei"], 24, bold=True)
-        self.info_font = self._load_font(["Microsoft YaHei UI", "Microsoft YaHei", "SimHei"], 18)
-        self.tip_font = self._load_font(["Microsoft YaHei UI", "Microsoft YaHei", "SimHei"], 15)
-        self.status_font = self._load_font(["Microsoft YaHei UI", "Microsoft YaHei", "SimHei"], 16, bold=True)
+        self.DIRECTION_KEY_MAP = {
+            pygame.K_UP: 0,
+            pygame.K_DOWN: 1,
+            pygame.K_LEFT: 2,
+            pygame.K_RIGHT: 3,
+            pygame.K_w: 0,
+            pygame.K_s: 1,
+            pygame.K_a: 2,
+            pygame.K_d: 3,
+        }
+
+        self.title_font = self._load_font(34, bold=True)
+        self.subtitle_font = self._load_font(22, bold=True)
+        self.button_font = self._load_font(24, bold=True)
+        self.info_font = self._load_font(18)
+        self.tip_font = self._load_font(15)
+        self.status_font = self._load_font(16, bold=True)
 
         self.current_scene = "home"
 
@@ -36,6 +46,7 @@ class GameUI:
         self.food = None
         self.room_id = ""
         self.score = 0
+        self.player_id = None
 
         self.connection_text = "未连接"
         self.connection_color = (220, 60, 60)
@@ -44,6 +55,9 @@ class GameUI:
         self.tip_color = (220, 60, 60)
         self.tip_start_time = 0
         self.tip_duration = 2500
+
+        self.room_players = []  # list of player dicts from server
+        self.all_players = []   # list of player dicts during game (with snake_body)
 
         self.map_area = pygame.Rect(60, 120, 560, 480)
         self.scene_buttons = {
@@ -66,23 +80,31 @@ class GameUI:
             "game": [],
         }
 
-    def _load_font(self, candidates, size, bold=False):
-        for name in candidates:
-            path = pygame.font.match_font(name)
-            if path:
-                font = pygame.font.Font(path, size)
+    def _load_font(self, size, bold=False):
+        # 优先使用打包进来的字体文件
+        bundled = _get_bundled_font("simhei.ttf")
+        if os.path.isfile(bundled):
+            try:
+                font = pygame.font.Font(bundled, size)
                 font.set_bold(bold)
                 return font
-        return pygame.font.SysFont(None, size, bold=bold)
+            except Exception:
+                pass
+        # 兜底：pygame 内置字体（不支持中文，但不会崩溃）
+        font = pygame.font.Font(None, size)
+        font.set_bold(bold)
+        return font
 
     def set_scene(self, scene_name):
         self.current_scene = scene_name
 
-    def update_room(self, room_id, score=0, snake=None):
+    def update_room(self, room_id, score=0, snake=None, players=None):
         self.room_id = str(room_id)
         self.score = int(score or 0)
         if snake is not None:
             self.set_snake(snake)
+        if players is not None:
+            self.room_players = players
         self.set_scene("room")
 
     def enter_game_scene(self):
@@ -204,11 +226,9 @@ class GameUI:
     def _draw_room_scene(self):
         title = self.title_font.render("四人房间", True, (32, 36, 48))
         room_text = self.info_font.render(f"房间号：{self.room_id or '--'}", True, (85, 96, 114))
-        note_text = self.tip_font.render("当前先按单人演示，其他位置预留。", True, (120, 128, 142))
 
         self.screen.blit(title, (60, 68))
         self.screen.blit(room_text, (60, 112))
-        self.screen.blit(note_text, (60, 142))
 
         slot_width = 190
         slot_height = 180
@@ -216,15 +236,21 @@ class GameUI:
         start_x = 60
         start_y = 210
 
+        player_count = len(self.room_players)
+
         for index in range(4):
             row = index // 2
             col = index % 2
             rect = pygame.Rect(start_x + col * (slot_width + gap), start_y + row * (slot_height + gap), slot_width, slot_height)
 
-            if index == 0:
+            if index < player_count:
+                player = self.room_players[index]
+                pid = player.get("id", "?")
+                pscore = player.get("score", 0)
                 self._draw_card(rect, bg_color=(239, 248, 242), border_color=(154, 216, 171))
-                title_text = self.subtitle_font.render("玩家1（我）", True, (33, 88, 46))
-                score_text = self.info_font.render(f"分数：{self.score}", True, (72, 92, 76))
+                label = f"玩家{index + 1}（我）" if index == 0 else f"玩家{index + 1}"
+                title_text = self.subtitle_font.render(f"{label} [ID:{pid}]", True, (33, 88, 46))
+                score_text = self.info_font.render(f"分数：{pscore}", True, (72, 92, 76))
                 body_text = self.tip_font.render("已加入房间，等待开始游戏", True, (98, 110, 100))
             else:
                 self._draw_card(rect, bg_color=(249, 250, 252), border_color=(224, 228, 233))
@@ -241,7 +267,7 @@ class GameUI:
         info_title = self.subtitle_font.render("房间信息", True, (42, 48, 60))
         info_1 = self.info_font.render(f"房间号：{self.room_id or '--'}", True, (92, 102, 118))
         info_2 = self.info_font.render("房间类型：4人房", True, (92, 102, 118))
-        info_3 = self.info_font.render("当前人数：1 / 4", True, (92, 102, 118))
+        info_3 = self.info_font.render(f"当前人数：{player_count} / 4", True, (92, 102, 118))
 
         self.screen.blit(info_title, (side_rect.x + 20, side_rect.y + 24))
         self.screen.blit(info_1, (side_rect.x + 20, side_rect.y + 86))
@@ -295,16 +321,42 @@ class GameUI:
                 pygame.draw.circle(self.screen, (235, 76, 76), center, radius)
                 pygame.draw.circle(self.screen, (188, 38, 38), center, radius, width=1)
 
-        for index, (snake_x, snake_y) in enumerate(self.snake):
-            if snake_x < 0 or snake_x >= self.map_width or snake_y < 0 or snake_y >= self.map_height:
+        # 其他玩家颜色表：身体色、头色、边框色
+        OTHER_SNAKE_COLORS = [
+            ((235, 140, 52), (200, 100, 20), (160, 80, 10)),   # 橙
+            ((80, 140, 220), (40, 90, 180), (25, 60, 140)),    # 蓝
+            ((190, 70, 200), (140, 30, 160), (100, 20, 120)),  # 紫
+        ]
+
+        other_index = 0
+        for player in (self.all_players if self.all_players else []):
+            pid = player.get("id")
+            body = player.get("snake_body") or []
+            if not body:
                 continue
 
-            x = offset_x + snake_x * cell_size
-            y = offset_y + snake_y * cell_size
-            rect = pygame.Rect(round(x), round(y), round(cell_size), round(cell_size))
-            color = (41, 163, 90) if index == len(self.snake) - 1 else (81, 196, 112)
-            pygame.draw.rect(self.screen, color, rect, border_radius=max(2, round(cell_size * 0.18)))
-            pygame.draw.rect(self.screen, (33, 117, 66), rect, width=1, border_radius=max(2, round(cell_size * 0.18)))
+            if pid == self.player_id:
+                body_color = (81, 196, 112)
+                head_color = (41, 163, 90)
+                border_color = (33, 117, 66)
+            else:
+                colors = OTHER_SNAKE_COLORS[other_index % len(OTHER_SNAKE_COLORS)]
+                body_color, head_color, border_color = colors
+                other_index += 1
+
+            for seg_index, seg in enumerate(body):
+                if isinstance(seg, (list, tuple)) and len(seg) >= 2:
+                    snake_x, snake_y = int(seg[0]), int(seg[1])
+                else:
+                    continue
+                if snake_x < 0 or snake_x >= self.map_width or snake_y < 0 or snake_y >= self.map_height:
+                    continue
+                x = offset_x + snake_x * cell_size
+                y = offset_y + snake_y * cell_size
+                rect = pygame.Rect(round(x), round(y), round(cell_size), round(cell_size))
+                color = head_color if seg_index == len(body) - 1 else body_color
+                pygame.draw.rect(self.screen, color, rect, border_radius=max(2, round(cell_size * 0.18)))
+                pygame.draw.rect(self.screen, border_color, rect, width=1, border_radius=max(2, round(cell_size * 0.18)))
 
         info = self.info_font.render(
             f"地图：{self.map_width} x {self.map_height}    分数：{self.score}    蛇长：{len(self.snake)}",

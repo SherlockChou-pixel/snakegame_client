@@ -1,7 +1,8 @@
-import ast
+﻿import ast
 import json
 import threading
 import time
+import os
 
 import protocol
 from game_ui import GameUI
@@ -121,7 +122,14 @@ class Client:
         self.score = int(data.get("score", 0) or 0)
         self.snake = data.get("snake", []) or []
 
-        self.ui.update_room(self.room_id, score=self.score, snake=self.snake)
+        # 用自己的信息初始化玩家列表，等待 cmd 6 更新完整列表
+        self_player = {
+            "id": self.player_id,
+            "score": self.score,
+            "snake": self.snake,
+            "player_state": data.get("player_state"),
+        }
+        self.ui.update_room(self.room_id, score=self.score, snake=self.snake, players=[self_player])
         self.ui.show_message(f"已进入房间 {self.room_id}", color=(60, 160, 90), duration=1800)
         print(f"房间号: {self.room_id}")
         print(f"玩家ID: {self.player_id}")
@@ -161,7 +169,12 @@ class Client:
         if self.room_id is None:
             self.room_id = result.get("room_id")
 
-        player_state = self._extract_local_player_state(result.get("players"))
+        players = result.get("players") or []
+        if isinstance(players, list) and players:
+            self.ui.all_players = players
+            self.ui.player_id = self.player_id
+
+        player_state = self._extract_local_player_state(players)
         if player_state:
             self.player_id = player_state.get("id", self.player_id)
             self.score = int(player_state.get("score", self.score) or 0)
@@ -171,6 +184,11 @@ class Client:
             self.food = self._normalize_food(result.get("food"))
 
         self._sync_ui_player_state()
+
+    def _handle_room_players(self, result):
+        players = result.get("data", {}).get("players", [])
+        if isinstance(players, list):
+            self.ui.room_players = players
 
     def _handle_cmd4_message(self, result):
         data = result.get("data", {})
@@ -203,6 +221,8 @@ class Client:
                 self._handle_map_data(result)
             elif cmd == 4:
                 self._handle_cmd4_message(result)
+            elif cmd == 6:
+                self._handle_room_players(result)
             elif msg_type == "game_state_update":
                 self._handle_game_state_update(result)
             elif msg:
@@ -325,6 +345,19 @@ class Client:
             print("程序已退出")
 
 
+def load_config():
+    """加载配置文件"""
+    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        return config.get('server_ip', '127.0.0.1'), config.get('server_port', 8888)
+    except (FileNotFoundError, json.JSONDecodeError):
+        print("配置文件加载失败，使用默认配置")
+        return '127.0.0.1', 8888
+
+
 if __name__ == "__main__":
-    client = Client("127.0.0.1", 8888)
+    server_ip, server_port = load_config()
+    client = Client(server_ip, server_port)
     client.run()
